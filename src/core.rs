@@ -12,6 +12,8 @@ use crate::serialize::{LogEntriesBytes, TryFromExactBytes};
 use crate::state_machine::{RaftStateMachine, StateMachine};
 use crate::timeout::Timeout;
 
+// TODO put more log stuff in storage, storage should just hold the base array of log entries
+
 pub struct Raft<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> {
     storage: P,
     network: N,
@@ -39,7 +41,6 @@ enum Role {
 
 #[derive(Copy, Clone)]
 struct LeaderView {
-    next_index: u32,
     match_index: u32,
     next_beat: Timeout,
     outstanding_rpc: Option<OutstandingRPC>,
@@ -47,7 +48,7 @@ struct LeaderView {
 
 #[derive(Copy, Clone)]
 enum OutstandingRPC {
-    AppendEntries,
+    AppendEntries { index: u32 },
     InstallSnapshot { offset: u32, amt: u32 },
 }
 
@@ -225,15 +226,22 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
             let view = views.get_mut(&src_node_id).unwrap();
             let config = config(&self.log, &self.state_machine);
 
+            let mut next_index = match view.outstanding_rpc {
+                Some(OutstandingRPC::AppendEntries { index }) => index,
+                _ => 0
+            };
+
             if success {
                 view.match_index = match_index;
-                view.next_index = match_index + 1;
+                next_index = match_index + 1;
             } else {
-                view.next_index -= config.next_index_decrease_rate;
+                next_index -= config.next_index_decrease_rate;
             }
 
-            if view.next_index <= self.log.get_ref().last_log_index() {
-                send_entries_or_snapshot_and_update_view(src_node_id, view, &mut self.network, &mut self.storage, self.log.get_ref(), config, self.commit_index);
+            if next_index <= self.log.get_ref().last_log_index() {
+                if !view.try_send_append_entries(src_node_id, &mut self.network, self.log.get_ref(), config, self.storage.current_term(), self.commit_index, next_index) {
+                    view.send_install_snapshot(src_node_id, &mut self.network, &mut self.storage, config, self.log.get_ref(), 0);
+                }
             } else {
                 view.outstanding_rpc = None;
                 view.next_beat = config.new_heartbeat_timeout();
@@ -299,10 +307,9 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
             self.role = Role::Leader {
                 noop_index: next_index,
                 views: self.config().other_node_ids().map(|id| (id, LeaderView {
-                    next_index,
                     match_index: 0,
                     next_beat: self.config().new_rpc_response_timeout(),
-                    outstanding_rpc: Some(OutstandingRPC::AppendEntries),
+                    outstanding_rpc: Some(OutstandingRPC::AppendEntries { index: next_index }),
                 })).collect(),
             };
 
@@ -347,14 +354,16 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
                 let config = config(&self.log, &self.state_machine);
 
                 if success {
-                    if let Some(OutstandingRPC::InstallSnapshot { offset, amt }) = &mut view.outstanding_rpc {
-                        *offset += *amt;
-                        if *offset >= self.storage.total_snapshot_bytes() {
-                            view.next_index = self.log.get_ref().index_before_first_log_entry() + 1;
-                        }
-                    }
+                    let offset = match view.outstanding_rpc {
+                        Some(OutstandingRPC::InstallSnapshot { offset, amt }) => offset + amt,
+                        _ => 0
+                    };
 
-                    send_entries_or_snapshot_and_update_view(src_node_id, view, &mut self.network, &mut self.storage, self.log.get_ref(), config, self.commit_index);
+                    if offset >= self.storage.total_snapshot_bytes() {
+                        view.try_send_append_entries(src_node_id, &mut self.network, self.log.get_ref(), config, self.storage.current_term(), self.commit_index, self.log.get_ref().index_before_first_log_entry() + 1);
+                    } else {
+                        view.send_install_snapshot(src_node_id, &mut self.network, &mut self.storage, config, self.log.get_ref(), offset);
+                    }
                 } else {
                     view.outstanding_rpc = None;
                     view.next_beat = config.new_heartbeat_timeout();
@@ -370,7 +379,7 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
 
                 for (other_id, view) in views {
                     if view.outstanding_rpc.is_none() {
-                        try_send_append_entries_and_update_view(*other_id, view, &mut self.network, self.log.get_ref(), &config, self.storage.current_term(), self.commit_index);
+                        view.try_send_append_entries(*other_id, &mut self.network, self.log.get_ref(), &config, self.storage.current_term(), self.commit_index, self.log.get_ref().last_log_index());
                     }
                 }
             }
@@ -418,7 +427,16 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
         if let Role::Leader { views, .. } = &mut self.role {
             let view = views.get_mut(&node_id).unwrap();
             let config = config(&self.log, &self.state_machine);
-            send_entries_or_snapshot_and_update_view(node_id, view, &mut self.network, &mut self.storage, self.log.get_ref(), config, self.commit_index);
+
+            if let Some(OutstandingRPC::InstallSnapshot { offset, .. }) = view.outstanding_rpc {
+                view.send_install_snapshot(node_id, &mut self.network, &mut self.storage, config, self.log.get_ref(), offset);
+            } else {
+                let index = match view.outstanding_rpc {
+                    Some(OutstandingRPC::AppendEntries { index }) => index,
+                    _ => self.log.get_ref().last_log_index() + 1
+                };
+                view.try_send_append_entries(node_id, &mut self.network, self.log.get_ref(), config, self.storage.current_term(), self.commit_index, index);
+            }
         }
     }
 
@@ -462,30 +480,39 @@ impl CandidateView {
     }
 }
 
+impl LeaderView {
+    fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>>(&mut self, node_id: u32, network: &mut N, log: &Log<S::Command>, config: &Config, term: u32, commit_index: u32, index: u32) -> bool {
+        if try_send_append_entries(network, config, log, term, commit_index, node_id, index) {
+            self.next_beat = config.new_rpc_response_timeout();
+            self.outstanding_rpc = Some(OutstandingRPC::AppendEntries { index });
+            true
+        } else {
+            false
+        }
+    }
+
+    fn send_install_snapshot<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>>(&mut self, node_id: u32, network: &mut N, storage: &mut P, config: &Config, log: &Log<S::Command>, offset: u32) {
+        let total_bytes = storage.total_snapshot_bytes();
+
+        let amt = (config.max_message_bytes - 64).min(total_bytes - offset); // TODO calculate this properly
+
+        self.outstanding_rpc = Some(OutstandingRPC::InstallSnapshot { offset, amt });
+        self.next_beat = config.new_rpc_response_timeout();
+
+        network.send_raft_message(node_id, Message::InstallSnapshot {
+            term: storage.current_term(),
+            leader_id: 0,
+            last_included_index: log.index_before_first_log_entry(),
+            last_included_term: log.term_before_first_log_entry(),
+            offset,
+            data: storage.snapshot_chunk(offset, amt).unwrap(),
+            done: offset + amt >= total_bytes,
+        })
+    }
+}
+
 fn config<'a, S: StateMachine, P: PersistentStorage<S>>(log: &'a PersistedLog<S, P>, state_machine: &'a RaftStateMachine<S>) -> &'a Config {
     log.get_ref().config().unwrap_or(state_machine.config())
-}
-
-fn send_entries_or_snapshot_and_update_view<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>>
-(to_node_id: u32, view: &mut LeaderView, network: &mut N, storage: &mut P, log: &Log<S::Command>, config: &Config, commit_index: u32) {
-    if !try_send_append_entries_and_update_view(to_node_id, view, network, log, config, storage.current_term(), commit_index) {
-        let offset = match view.outstanding_rpc {
-            Some(OutstandingRPC::InstallSnapshot { offset, .. }) => offset,
-            _ => 0
-        };
-        send_install_snapshot_and_update_view(network, storage, config, to_node_id, log.index_before_first_log_entry(), log.term_before_first_log_entry(), offset, view);
-    }
-}
-
-fn try_send_append_entries_and_update_view<S: StateMachine, N: NetworkInterface<S>>
-(to_node_id: u32, view: &mut LeaderView, network: &mut N, log: &Log<S::Command>, config: &Config, term: u32, commit_index: u32) -> bool {
-    if try_send_append_entries(network, config, log, term, commit_index, to_node_id, view.next_index) {
-        view.next_beat = config.new_rpc_response_timeout();
-        view.outstanding_rpc = Some(OutstandingRPC::AppendEntries);
-        true
-    } else {
-        false
-    }
 }
 
 fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>>
@@ -504,27 +531,6 @@ fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>>
         false
     }
 }
-
-fn send_install_snapshot_and_update_view<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>>
-(network: &mut N, storage: &mut P, config: &Config, to_node_id: u32, last_included_index: u32, last_included_term: u32, offset: u32, view: &mut LeaderView) {
-    let total_bytes = storage.total_snapshot_bytes();
-
-    let amt = (config.max_message_bytes - 64).min(total_bytes - offset); // TODO calculate this properly
-
-    view.outstanding_rpc = Some(OutstandingRPC::InstallSnapshot { offset, amt });
-    view.next_beat = config.new_rpc_response_timeout();
-
-    network.send_raft_message(to_node_id, Message::InstallSnapshot {
-        term: storage.current_term(),
-        leader_id: 0,
-        last_included_index,
-        last_included_term,
-        offset,
-        data: storage.snapshot_chunk(offset, amt).unwrap(),
-        done: offset + amt >= total_bytes,
-    })
-}
-
 
 fn send_request_vote<S: StateMachine, N: NetworkInterface<S>>(network: &mut N, log: &Log<S::Command>, term: u32, to_node_id: u32) {
     network.send_raft_message(to_node_id, Message::RequestVote { term, last_log_index: log.last_log_index(), last_log_term: log.last_log_term() })
