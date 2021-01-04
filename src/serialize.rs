@@ -4,9 +4,8 @@ use std::marker::PhantomData;
 
 use crate::config::Config;
 use crate::message::{Message, OutgoingAppendEntries};
-use crate::log::{LogEntry, LogEntryType};
-use crate::persistent_storage::Snapshot;
 use crate::state_machine::{RaftStateMachine, StateMachine};
+use crate::core::{LogEntry, LogEntryType};
 
 pub trait WriteBytes {
     fn write_bytes(&self, writer: impl io::Write) -> io::Result<usize>;
@@ -116,18 +115,6 @@ impl<S: StateMachine> TryFromReader for RaftStateMachine<S> {
 
 impl<S: StateMachine> WriteBytes for RaftStateMachine<S> {
     fn write_bytes(&self, writer: impl Write) -> io::Result<usize> {
-        unimplemented!()
-    }
-}
-
-impl<S: WriteBytes> WriteBytes for Snapshot<S> {
-    fn write_bytes(&self, writer: impl Write) -> io::Result<usize> {
-        unimplemented!()
-    }
-}
-
-impl<S: TryFromReader> TryFromReader for Snapshot<S> {
-    fn try_from_reader(reader: impl Read) -> Option<(Self, usize)> {
         unimplemented!()
     }
 }

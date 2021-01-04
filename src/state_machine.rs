@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::config::Config;
-use crate::log::{LogEntry, LogEntryType};
 use crate::serialize::{TryFromReader, WriteBytes, TryFromBytes};
+use crate::core::{LogEntry, LogEntryType};
 
 pub trait StateMachine: TryFromReader + WriteBytes {
     type Command: TryFromBytes + WriteBytes;

@@ -1,4 +1,4 @@
-use crate::log::LogEntry;
+use crate::core::LogEntry;
 
 pub enum Message<'a> {
     AppendEntries {
