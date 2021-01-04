@@ -198,6 +198,7 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
                 self.network.send_raft_message(src_node_id, Message::AppendEntriesResponse { term: self.storage.inner().current_term(), success: true, match_index });
 
                 update_commit_index(leader_commit, &mut self.commit_index, self.storage.log(), &mut self.state_machine);
+                try_make_snapshot(&mut self.storage, &self.state_machine, self.commit_index);
 
                 return;
             }
@@ -251,6 +252,8 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
                         self.network.handle_read(req.client_id, req.request_id, req.data, &self.state_machine.inner());
                     }
                 }
+
+                try_make_snapshot(&mut self.storage, &self.state_machine, self.commit_index);
             }
         }
     }
@@ -554,7 +557,7 @@ fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>,
     true
 }
 
-fn update_commit_index<'a, S: StateMachine + 'a, P: PersistentStorage<S>>(mut new_commit_index: u32, old_commit_index: &mut u32, log: LogRef<'a, S, P>, state_machine: &mut RaftStateMachine<S>) -> &'a [LogEntry<S::Command>] {
+fn update_commit_index<'a, S: StateMachine, P: PersistentStorage<S>>(mut new_commit_index: u32, old_commit_index: &mut u32, log: LogRef<'a, S, P>, state_machine: &mut RaftStateMachine<S>) -> &'a [LogEntry<S::Command>] {
     if new_commit_index > *old_commit_index {
         new_commit_index = log.last_log_index().min(new_commit_index);
 
@@ -585,4 +588,12 @@ fn max_commit<S: StateMachine, P: PersistentStorage<S>>(views: &HashMap<u32, Lea
 fn majority_matches(views: &HashMap<u32, LeaderView>, match_index: u32) -> bool {
     let match_count = views.iter().filter(|(_, v)| v.match_index >= match_index).count() + 1;
     match_count > ((views.len() + 1) / 2)
+}
+
+fn try_make_snapshot<S: StateMachine, P: PersistentStorage<S>>(storage: &mut RaftStorage<S, P>, state_machine: &RaftStateMachine<S>, commit_index: u32) {
+    let config = config(storage, state_machine);
+    if commit_index - storage.inner().snapshot_last_index() >= config.snapshot_min_log_size {
+        storage.set_snapshot(commit_index, storage.log().term(commit_index).unwrap(), state_machine);
+        storage.log_mut().remove_entries_before(commit_index);
+    }
 }

@@ -14,6 +14,7 @@ pub struct Config {
     pub rpc_response_timeout: u64,
     pub max_message_bytes: u32,
     pub next_index_decrease_rate: u32,
+    pub snapshot_min_log_size: u32,
     pub id: u32,
     pub nodes: HashMap<u32, NodeAddress>,
 }
