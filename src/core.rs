@@ -10,8 +10,6 @@ use crate::state_machine::{RaftStateMachine, StateMachine};
 use crate::storage::{LogMut, LogRef, RaftStorage, Storage};
 use crate::timeout::Timeout;
 
-// TODO put more log stuff in storage, storage should hold the base array of log entries
-
 pub struct Raft<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> {
     storage: RaftStorage<S, P>,
     network: N,
@@ -83,16 +81,18 @@ pub enum LogEntryType<C> {
 
 impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
     pub fn new(storage: P, mut network: N) -> Raft<S, P, N> {
-        let state_machine = storage.snapshot();
+        let storage = RaftStorage::new(storage);
+
+        let state_machine = storage.inner().snapshot();
         let config = storage.get_last_config_in_log().unwrap_or(&state_machine.config);
 
         network.on_config_update(config);
 
         let election_timeout = config.new_election_timeout();
-        let commit_index = storage.snapshot_last_index();
+        let commit_index = storage.inner().snapshot_last_index();
 
         Raft {
-            storage: RaftStorage::new(storage),
+            storage,
             network,
             commit_index,
             state_machine,
@@ -266,7 +266,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
             let new_election_timeout = self.config().new_election_timeout();
 
             if let Role::Follower { election_timeout } = &mut self.role {
-                if last_log_term >= self.storage.log().last_log_term() && last_log_index >= self.storage.log().last_log_index() {
+                if last_log_term >= self.storage.log().last_term() && last_log_index >= self.storage.log().last_index() {
                     grant_vote = match self.storage.inner().voted_for() {
                         Some(id) if id == src_node_id => true,
                         None => true,
@@ -297,7 +297,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
         };
 
         if become_leader {
-            let next_index = self.storage.log().last_log_index() + 1;
+            let next_index = self.storage.log().last_index() + 1;
             self.role = Role::Leader {
                 noop_index: next_index,
                 views: self.config().other_node_ids().map(|id| (id, LeaderView {
@@ -374,7 +374,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
 
                 for (other_id, view) in views {
                     if view.outstanding_rpc.is_none() {
-                        view.try_send_append_entries(*other_id, &mut self.network, &self.storage, &config, config.id, self.storage.log().last_log_index());
+                        view.try_send_append_entries(*other_id, &mut self.network, &self.storage, &config, config.id, self.storage.log().last_index());
                     }
                 }
             }
@@ -428,7 +428,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
             } else {
                 let index = match view.outstanding_rpc {
                     Some(OutstandingRPC::AppendEntries { index }) => index,
-                    _ => self.storage.log().last_log_index() + 1
+                    _ => self.storage.log().last_index() + 1
                 };
                 view.try_send_append_entries(node_id, &mut self.network, &self.storage, config, self.commit_index, index);
             }
@@ -528,7 +528,7 @@ fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>, P: Storage<S
 }
 
 fn send_request_vote<S: StateMachine, N: NetworkInterface<S>, P: Storage<S>>(network: &mut N, log: LogRef<S, P>, term: u32, to_node_id: u32) {
-    network.send_raft_message(to_node_id, Message::RequestVote { term, last_log_index: log.last_log_index(), last_log_term: log.last_log_term() })
+    network.send_raft_message(to_node_id, Message::RequestVote { term, last_log_index: log.last_index(), last_log_term: log.last_term() })
 }
 
 fn has_majority_votes(others: &HashMap<u32, CandidateView>) -> bool {
@@ -558,7 +558,7 @@ fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>,
 
 fn update_commit_index<'a, S: StateMachine, P: Storage<S>>(mut new_commit_index: u32, old_commit_index: &mut u32, log: LogRef<'a, S, P>, state_machine: &mut RaftStateMachine<S>) -> &'a [LogEntry<S::Command>] {
     if new_commit_index > *old_commit_index {
-        new_commit_index = log.last_log_index().min(new_commit_index);
+        new_commit_index = log.last_index().min(new_commit_index);
 
         // commit idx should always be greater than the first log index
         let committed_entries = &log.entries(*old_commit_index).unwrap()[..((new_commit_index - *old_commit_index) as usize)];

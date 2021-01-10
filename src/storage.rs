@@ -13,7 +13,7 @@ pub trait Storage<S: StateMachine>: Sized {
 
     fn log_entry(&self, index: usize) -> Option<&LogEntry<S::Command>>;
     fn log_entries(&self, start_index: usize) -> &[LogEntry<S::Command>];
-    fn get_last_config_in_log(&self) -> Option<&Config>;
+    fn get_index_of_last_config_in_log(&self) -> Option<usize>;
     fn num_log_entries(&self) -> usize;
 
     fn set_snapshot(&mut self, last_index: u32, last_term: u32, bytes: &impl WriteBytes);
@@ -48,7 +48,7 @@ pub type LogMut<'a, S, P> = Log<&'a mut RaftStorage<S, P>>;
 
 impl<S: StateMachine, P: Storage<S>> RaftStorage<S, P> {
     pub fn new(inner: P) -> RaftStorage<S, P> {
-        let last_config_index = find_latest_config_idx(inner.log_entries(0));
+        let last_config_index = inner.get_index_of_last_config_in_log();
         RaftStorage {
             inner,
             last_config_index,
@@ -112,7 +112,7 @@ impl<S: StateMachine, P: Storage<S>> RaftStorage<S, P> {
         self.last_config_index = self.last_config_index.filter(|idx| *idx < index);
         self.inner.remove_log_entries_starting_at(index);
         if self.last_config_index.is_none() {
-            self.last_config_index = find_latest_config_idx(self.inner.log_entries(0));
+            self.last_config_index = self.inner.get_index_of_last_config_in_log();
         }
     }
 
@@ -178,11 +178,11 @@ impl<'a, S: StateMachine, P: Storage<S>> Log<&'a RaftStorage<S, P>> {
             })
     }
 
-    pub fn last_log_term(&self) -> u32 {
+    pub fn last_term(&self) -> u32 {
         self.0.inner().log_entry(self.0.inner().num_log_entries() - 1).map(|e| e.term).unwrap_or(self.0.inner().snapshot_last_index())
     }
 
-    pub fn last_log_index(&self) -> u32 {
+    pub fn last_index(&self) -> u32 {
         self.0.inner().snapshot_last_index() + self.0.inner().num_log_entries() as u32
     }
 
@@ -209,13 +209,4 @@ impl<'a, S: StateMachine, P: Storage<S>> Log<&'a RaftStorage<S, P>> {
     fn matches(&self, index: u32, term: u32) -> bool {
         self.term(index).map(|t| t == term).unwrap_or(false)
     }
-}
-
-fn find_latest_config_idx<C>(entries: &[LogEntry<C>]) -> Option<usize> {
-    for (idx, entry) in entries.iter().enumerate().rev() {
-        if let LogEntryType::Config(_) = entry.entry_type {
-            return Some(idx);
-        }
-    }
-    None
 }
