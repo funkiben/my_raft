@@ -7,9 +7,9 @@ use crate::config::Config;
 use crate::message::{Message, OutgoingAppendEntries};
 use crate::network::{ClientRequest, MessageEvent, NetworkInterface};
 use crate::state_machine::{RaftStateMachine, StateMachine};
+use crate::storage::{RaftStorage, Storage};
+use crate::storage::log::{LogEntry, LogEntryType, LogMut, LogRef};
 use crate::timeout::Timeout;
-use crate::storage::{Storage, RaftStorage};
-use crate::storage::log::{LogEntryType, LogRef, LogMut, LogEntry};
 
 pub struct Raft<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> {
     storage: RaftStorage<S, P>,
