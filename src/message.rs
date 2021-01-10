@@ -1,4 +1,4 @@
-use crate::core::LogEntry;
+use crate::storage::log::LogEntry;
 
 #[derive(Eq, PartialEq, Debug)]
 pub enum Message<'a> {

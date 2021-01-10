@@ -5,9 +5,9 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::bytes::{bool_to_byte, BytesRef, ReadBytes, TryFromBytes, WriteBytes};
 use crate::config::{Config, NodeAddress};
-use crate::core::{LogEntry, LogEntryType};
 use crate::message::{Message, OutgoingAppendEntries};
 use crate::state_machine::{RaftStateMachine, StateMachine};
+use crate::storage::log::{LogEntry, LogEntryType};
 
 const LOG_ENTRY_COMMAND_ID: u8 = 0u8;
 const LOG_ENTRY_CONFIG_ID: u8 = 1u8;
@@ -363,9 +363,9 @@ mod tests {
 
     use crate::bytes::{BytesIterator, BytesRef, ReadBytes, TryFromBytes, WriteBytes};
     use crate::config::{Config, NodeAddress};
-    use crate::core::{LogEntry, LogEntryType};
     use crate::message::{Message, OutgoingAppendEntries};
     use crate::state_machine::{RaftStateMachine, StateMachine};
+    use crate::storage::log::{LogEntryType, LogEntry};
 
     #[derive(Eq, PartialEq, Debug)]
     struct DummyData(Vec<u8>);

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::bytes::{TryFromBytes, WriteBytes};
 use crate::config::Config;
-use crate::core::{LogEntry, LogEntryType};
+use crate::storage::log::{LogEntry, LogEntryType};
 
 pub trait StateMachine: TryFromBytes + WriteBytes {
     type Command: TryFromBytes + WriteBytes;

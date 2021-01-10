@@ -7,8 +7,9 @@ use crate::config::Config;
 use crate::message::{Message, OutgoingAppendEntries};
 use crate::network::{ClientRequest, MessageEvent, NetworkInterface};
 use crate::state_machine::{RaftStateMachine, StateMachine};
-use crate::storage::{LogMut, LogRef, RaftStorage, Storage};
 use crate::timeout::Timeout;
+use crate::storage::{Storage, RaftStorage};
+use crate::storage::log::{LogEntryType, LogRef, LogMut, LogEntry};
 
 pub struct Raft<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> {
     storage: RaftStorage<S, P>,
@@ -66,17 +67,6 @@ enum Event<'a, C, R> {
     NodeMessage(u32, Message<'a>),
     ClientCommand(ClientRequest<C>),
     ClientRead(ClientRequest<R>),
-}
-
-pub struct LogEntry<C> {
-    pub entry_type: LogEntryType<C>,
-    pub term: u32,
-}
-
-pub enum LogEntryType<C> {
-    Command { command: C, client_id: u32, command_id: u32 },
-    Noop,
-    Config(Config),
 }
 
 impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
