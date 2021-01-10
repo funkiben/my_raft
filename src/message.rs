@@ -1,9 +1,9 @@
 use crate::core::LogEntry;
 
+#[derive(Eq, PartialEq, Debug)]
 pub enum Message<'a> {
     AppendEntries {
         term: u32,
-        leader_id: u32,
         prev_log_index: u32,
         prev_log_term: u32,
         leader_commit: u32,
@@ -25,7 +25,6 @@ pub enum Message<'a> {
     },
     InstallSnapshot {
         term: u32,
-        leader_id: u32,
         last_included_index: u32,
         last_included_term: u32,
         offset: u32,
@@ -40,7 +39,6 @@ pub enum Message<'a> {
 
 pub struct OutgoingAppendEntries<'a, C> {
     pub term: u32,
-    pub leader_id: u32,
     pub prev_log_index: u32,
     pub prev_log_term: u32,
     pub leader_commit: u32,

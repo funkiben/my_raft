@@ -1,25 +1,20 @@
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::io;
-use std::io::{ErrorKind, Read, Write};
-use std::marker::PhantomData;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::ops::Index;
+use std::io::{ErrorKind, Write};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
+use my_raft::bytes::{ReadBytes, TryFromBytes, WriteBytes};
 use my_raft::config::{Config, NodeAddress};
-use my_raft::core::Raft;
-use my_raft::network::{ MessageEvent, NetworkInterface};
+use my_raft::network::{MessageEvent, NetworkInterface};
 use my_raft::state_machine::StateMachine;
-use my_raft::serialize::{WriteBytes, TryFromReader, TryFromBytes};
 
 fn main() {}
 
 struct UdpNetwork {
     addresses: HashMap<u32, SocketAddr>,
     socket: UdpSocket,
-    write_buffer: Vec<u8>
+    write_buffer: Vec<u8>,
 }
 
 impl NetworkInterface<KVStore> for UdpNetwork {
@@ -113,8 +108,8 @@ impl WriteBytes for KVStore {
     }
 }
 
-impl TryFromReader for KVStore {
-    fn try_from_reader(reader: impl Read) -> Option<(Self, usize)> {
+impl TryFromBytes for KVStore {
+    fn try_from_bytes(bytes: impl ReadBytes) -> Option<Self> {
         unimplemented!()
     }
 }
@@ -126,7 +121,7 @@ impl WriteBytes for KVStoreCommand {
 }
 
 impl TryFromBytes for KVStoreCommand {
-    fn try_from_bytes(bytes: &[u8]) -> Option<(Self, usize)> {
+    fn try_from_bytes(bytes: impl ReadBytes) -> Option<Self> {
         unimplemented!()
     }
 }

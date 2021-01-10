@@ -1,12 +1,11 @@
 use std::marker::PhantomData;
 
+use crate::bytes::WriteBytes;
 use crate::config::Config;
 use crate::core::{LogEntry, LogEntryType};
-use crate::serialize::WriteBytes;
 use crate::state_machine::{RaftStateMachine, StateMachine};
 
-// TODO make this more generic
-pub trait PersistentStorage<S: StateMachine>: Sized {
+pub trait Storage<S: StateMachine>: Sized {
     fn add_log_entry(&mut self, entry: LogEntry<S::Command>);
     fn remove_log_entries_before(&mut self, index: usize);
     fn remove_log_entries_starting_at(&mut self, index: usize);
@@ -47,7 +46,7 @@ pub struct Log<P>(P);
 pub type LogRef<'a, S, P> = Log<&'a RaftStorage<S, P>>;
 pub type LogMut<'a, S, P> = Log<&'a mut RaftStorage<S, P>>;
 
-impl<S: StateMachine, P: PersistentStorage<S>> RaftStorage<S, P> {
+impl<S: StateMachine, P: Storage<S>> RaftStorage<S, P> {
     pub fn new(inner: P) -> RaftStorage<S, P> {
         let last_config_index = find_latest_config_idx(inner.log_entries(0));
         RaftStorage {
@@ -120,10 +119,9 @@ impl<S: StateMachine, P: PersistentStorage<S>> RaftStorage<S, P> {
     fn save_log(&mut self) {
         self.inner.save_log();
     }
-
 }
 
-impl<'a, S: StateMachine, P: PersistentStorage<S>> Log<&'a mut RaftStorage<S, P>> {
+impl<'a, S: StateMachine, P: Storage<S>> Log<&'a mut RaftStorage<S, P>> {
     pub fn try_append_entries(&mut self, mut prev_index: u32, prev_term: u32, entries: impl Iterator<Item=LogEntry<S::Command>>) -> Option<u32> {
         // assume entries before the log starts will always match since they had to have been committed
         if prev_index < self.0.inner().snapshot_last_index() {
@@ -170,7 +168,7 @@ impl<'a, S: StateMachine, P: PersistentStorage<S>> Log<&'a mut RaftStorage<S, P>
     }
 }
 
-impl<'a, S: StateMachine, P: PersistentStorage<S>> Log<&'a RaftStorage<S, P>> {
+impl<'a, S: StateMachine, P: Storage<S>> Log<&'a RaftStorage<S, P>> {
     pub fn has_uncommitted_command_from_client(&self, commit_idx: u32, client: u32, id: u32) -> bool {
         let arr_commit_idx = self.log_index_to_array_index(commit_idx);
         self.0.inner().log_entries(arr_commit_idx + 1).iter().any(|e|

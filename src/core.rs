@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::option::Option::Some;
 use std::time::Duration;
 
+use crate::bytes::{BytesRef, ReadBytes};
 use crate::config::Config;
 use crate::message::{Message, OutgoingAppendEntries};
 use crate::network::{ClientRequest, MessageEvent, NetworkInterface};
-use crate::persistent_storage::{LogMut, LogRef, PersistentStorage, RaftStorage};
-use crate::serialize::{LogEntriesBytes, TryFromExactBytes};
 use crate::state_machine::{RaftStateMachine, StateMachine};
+use crate::storage::{LogMut, LogRef, RaftStorage, Storage};
 use crate::timeout::Timeout;
 
 // TODO put more log stuff in storage, storage should hold the base array of log entries
 
-pub struct Raft<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> {
+pub struct Raft<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> {
     storage: RaftStorage<S, P>,
     network: N,
     commit_index: u32,
@@ -81,10 +81,10 @@ pub enum LogEntryType<C> {
     Config(Config),
 }
 
-impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
+impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
     pub fn new(storage: P, mut network: N) -> Raft<S, P, N> {
         let state_machine = storage.snapshot();
-        let config = storage.get_last_config_in_log().unwrap_or(state_machine.config());
+        let config = storage.get_last_config_in_log().unwrap_or(&state_machine.config);
 
         network.on_config_update(config);
 
@@ -106,29 +106,30 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
         let mut msg_buf = vec![0u8; self.config().max_message_bytes as usize];
 
         loop {
-            let event = self.next_event(&mut msg_buf);
-            self.handle_event(event);
+            if let Some(event) = self.next_event(&mut msg_buf) {
+                self.handle_event(event);
 
-            msg_buf.resize_with(self.config().max_message_bytes as usize, || 0u8);
+                msg_buf.resize_with(self.config().max_message_bytes as usize, || 0u8);
+            }
         }
     }
 
 
-    fn next_event<'a>(&mut self, msg_buf: &'a mut [u8]) -> Event<'a, S::Command, N::ReadRequest> {
+    fn next_event<'a>(&mut self, msg_buf: &'a mut [u8]) -> Option<Event<'a, S::Command, N::ReadRequest>> {
         let (timeout, timeout_type) = self.next_timeout();
 
         let time_left = timeout.time_left();
 
         if time_left == Duration::from_secs(0) {
-            return Event::Timeout(timeout_type);
+            return Some(Event::Timeout(timeout_type));
         }
 
         match self.network.wait_for_message(time_left, msg_buf) {
             MessageEvent::Node { size, src_node_id } =>
-                Message::try_from_bytes(&msg_buf[..size]).map(|m| Event::NodeMessage(src_node_id, m)).unwrap_or_else(move || self.next_event(msg_buf)),
-            MessageEvent::ClientCommand(req) => Event::ClientCommand(req),
-            MessageEvent::ClientRead(req) => Event::ClientRead(req),
-            MessageEvent::Timeout => Event::Timeout(timeout_type)
+                Message::try_from_bytes(&msg_buf[..size]).map(|m| Event::NodeMessage(src_node_id, m)),
+            MessageEvent::ClientCommand(req) => Some(Event::ClientCommand(req)),
+            MessageEvent::ClientRead(req) => Some(Event::ClientRead(req)),
+            MessageEvent::Timeout => Some(Event::Timeout(timeout_type))
         }
     }
 
@@ -174,27 +175,27 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
 
     fn handle_node_message(&mut self, src_node_id: u32, msg: Message) {
         match msg {
-            Message::AppendEntries { term, leader_id, prev_log_index, prev_log_term, leader_commit, entries } =>
-                self.handle_append_entries(src_node_id, term, leader_id, prev_log_index, prev_log_term, leader_commit, entries),
+            Message::AppendEntries { term, prev_log_index, prev_log_term, leader_commit, entries } =>
+                self.handle_append_entries(src_node_id, term, prev_log_index, prev_log_term, leader_commit, entries),
             Message::AppendEntriesResponse { term, success, match_index } =>
                 self.handle_append_entries_response(src_node_id, term, success, match_index),
             Message::RequestVote { term, last_log_index, last_log_term } =>
                 self.handle_request_vote(src_node_id, term, last_log_index, last_log_term),
             Message::RequestVoteResponse { term, vote_granted } =>
                 self.handle_request_vote_response(src_node_id, term, vote_granted),
-            Message::InstallSnapshot { term, leader_id, last_included_index, last_included_term, offset, data, done } =>
-                self.handle_install_snapshot(src_node_id, term, leader_id, last_included_index, last_included_term, offset, data, done),
+            Message::InstallSnapshot { term, last_included_index, last_included_term, offset, data, done } =>
+                self.handle_install_snapshot(src_node_id, term, last_included_index, last_included_term, offset, data, done),
             Message::InstallSnapshotResponse { term, success } =>
                 self.handle_install_snapshot_response(src_node_id, term, success)
         }
     }
 
     // TODO handle config entry
-    fn handle_append_entries(&mut self, src_node_id: u32, term: u32, leader_id: u32, prev_log_index: u32, prev_log_term: u32, leader_commit: u32, entries: &[u8]) {
+    fn handle_append_entries(&mut self, src_node_id: u32, term: u32, prev_log_index: u32, prev_log_term: u32, leader_commit: u32, entries: &[u8]) {
         if self.check_term_and_update_self(term) {
-            self.receive_message_from_leader(leader_id);
+            self.receive_message_from_leader(src_node_id);
 
-            if let Some(match_index) = self.storage.log_mut().try_append_entries(prev_log_index, prev_log_term, LogEntriesBytes::new(entries)) {
+            if let Some(match_index) = self.storage.log_mut().try_append_entries(prev_log_index, prev_log_term, BytesRef::new(entries).iter()) {
                 self.network.send_raft_message(src_node_id, Message::AppendEntriesResponse { term: self.storage.inner().current_term(), success: true, match_index });
 
                 update_commit_index(leader_commit, &mut self.commit_index, self.storage.log(), &mut self.state_machine);
@@ -243,13 +244,13 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
                 let new_commit_index = max_commit(views, self.storage.log(), self.storage.inner().current_term(), self.commit_index);
                 for entry in update_commit_index(new_commit_index, &mut self.commit_index, self.storage.log(), &mut self.state_machine) {
                     if let LogEntryType::Command { client_id, command_id, .. } = entry.entry_type {
-                        self.network.handle_command_executed(client_id, command_id, &self.state_machine.inner())
+                        self.network.handle_command_executed(client_id, command_id, &self.state_machine.inner)
                     }
                 }
 
                 if self.commit_index >= *noop_index {
                     for req in self.read_request_queue.drain(..) {
-                        self.network.handle_read(req.client_id, req.request_id, req.data, &self.state_machine.inner());
+                        self.network.handle_read(req.client_id, req.request_id, req.data, &self.state_machine.inner);
                     }
                 }
 
@@ -313,14 +314,14 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
 
             let config = config(&self.storage, &self.state_machine);
             for other_id in config.other_node_ids() {
-                try_send_append_entries(other_id, &mut self.network, self.storage.log(), config.id, self.storage.inner().current_term(), self.commit_index, next_index);
+                try_send_append_entries(other_id, &mut self.network, self.storage.log(), self.storage.inner().current_term(), self.commit_index, next_index);
             }
         }
     }
 
-    fn handle_install_snapshot(&mut self, src_node_id: u32, term: u32, leader_id: u32, last_included_index: u32, last_included_term: u32, offset: u32, data: &[u8], done: bool) {
+    fn handle_install_snapshot(&mut self, src_node_id: u32, term: u32, last_included_index: u32, last_included_term: u32, offset: u32, data: &[u8], done: bool) {
         let success = if self.check_term_and_update_self(term) {
-            self.receive_message_from_leader(leader_id);
+            self.receive_message_from_leader(src_node_id);
 
             self.storage.add_new_snapshot_chunk(offset, data);
 
@@ -387,7 +388,7 @@ impl<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>> Raft<S, P
     fn handle_client_read_request(&mut self, req: ClientRequest<N::ReadRequest>) {
         if let Role::Leader { noop_index, .. } = self.role {
             if self.commit_index >= noop_index {
-                self.network.handle_read(req.client_id, req.request_id, req.data, &self.state_machine.inner());
+                self.network.handle_read(req.client_id, req.request_id, req.data, &self.state_machine.inner);
             } else {
                 self.read_request_queue.push(req);
             }
@@ -475,9 +476,9 @@ impl CandidateView {
 }
 
 impl LeaderView {
-    fn try_send_append_entries<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>>
+    fn try_send_append_entries<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>>
     (&mut self, node_id: u32, network: &mut N, storage: &RaftStorage<S, P>, config: &Config, commit_index: u32, index: u32) -> bool {
-        if try_send_append_entries(node_id, network, storage.log(), config.id, storage.inner().current_term(), commit_index, index) {
+        if try_send_append_entries(node_id, network, storage.log(), storage.inner().current_term(), commit_index, index) {
             self.next_beat = config.new_rpc_response_timeout();
             self.outstanding_rpc = Some(OutstandingRPC::AppendEntries { index });
             true
@@ -486,7 +487,7 @@ impl LeaderView {
         }
     }
 
-    fn send_install_snapshot<S: StateMachine, P: PersistentStorage<S>, N: NetworkInterface<S>>
+    fn send_install_snapshot<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>>
     (&mut self, node_id: u32, network: &mut N, storage: &RaftStorage<S, P>, config: &Config, offset: u32) {
         let total_bytes = storage.inner().total_snapshot_bytes();
 
@@ -497,7 +498,6 @@ impl LeaderView {
 
         network.send_raft_message(node_id, Message::InstallSnapshot {
             term: storage.inner().current_term(),
-            leader_id: 0,
             last_included_index: storage.inner().snapshot_last_index(),
             last_included_term: storage.inner().snapshot_last_term(),
             offset,
@@ -507,16 +507,15 @@ impl LeaderView {
     }
 }
 
-fn config<'a, S: StateMachine, P: PersistentStorage<S>>(storage: &'a RaftStorage<S, P>, state_machine: &'a RaftStateMachine<S>) -> &'a Config {
-    storage.get_last_config_in_log().unwrap_or(state_machine.config())
+fn config<'a, S: StateMachine, P: Storage<S>>(storage: &'a RaftStorage<S, P>, state_machine: &'a RaftStateMachine<S>) -> &'a Config {
+    storage.get_last_config_in_log().unwrap_or(&state_machine.config)
 }
 
-fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>, P: PersistentStorage<S>>
-(to_node_id: u32, network: &mut N, log: LogRef<S, P>, leader_id: u32, term: u32, commit_index: u32, index: u32) -> bool {
+fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>, P: Storage<S>>
+(to_node_id: u32, network: &mut N, log: LogRef<S, P>, term: u32, commit_index: u32, index: u32) -> bool {
     if let Some(entries) = log.entries(index) {
         network.send_raft_message(to_node_id, OutgoingAppendEntries {
             term,
-            leader_id,
             prev_log_index: index - 1,
             prev_log_term: log.term(index - 1).unwrap_or(0),
             leader_commit: commit_index,
@@ -528,7 +527,7 @@ fn try_send_append_entries<S: StateMachine, N: NetworkInterface<S>, P: Persisten
     }
 }
 
-fn send_request_vote<S: StateMachine, N: NetworkInterface<S>, P: PersistentStorage<S>>(network: &mut N, log: LogRef<S, P>, term: u32, to_node_id: u32) {
+fn send_request_vote<S: StateMachine, N: NetworkInterface<S>, P: Storage<S>>(network: &mut N, log: LogRef<S, P>, term: u32, to_node_id: u32) {
     network.send_raft_message(to_node_id, Message::RequestVote { term, last_log_index: log.last_log_index(), last_log_term: log.last_log_term() })
 }
 
@@ -540,7 +539,7 @@ fn has_majority_votes(others: &HashMap<u32, CandidateView>) -> bool {
     votes > ((others.len() + 1) / 2) // add 1 to include ourselves
 }
 
-fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>, P: PersistentStorage<S>>
+fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>, P: Storage<S>>
 (network: &mut N, mut log: LogMut<S, P>, commit_index: u32, state_machine: &RaftStateMachine<S>, req: ClientRequest<S::Command>) -> bool {
     // ignore request if we already have it but haven't committed it yet
     if log.immut().has_uncommitted_command_from_client(commit_index, req.client_id, req.request_id) {
@@ -549,7 +548,7 @@ fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>,
 
     // reply immediately if request has already been committed
     if state_machine.is_last_client_command(req.client_id, req.request_id) {
-        network.handle_command_executed(req.client_id, req.request_id, state_machine.inner());
+        network.handle_command_executed(req.client_id, req.request_id, &state_machine.inner);
         return false;
     }
 
@@ -557,7 +556,7 @@ fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>,
     true
 }
 
-fn update_commit_index<'a, S: StateMachine, P: PersistentStorage<S>>(mut new_commit_index: u32, old_commit_index: &mut u32, log: LogRef<'a, S, P>, state_machine: &mut RaftStateMachine<S>) -> &'a [LogEntry<S::Command>] {
+fn update_commit_index<'a, S: StateMachine, P: Storage<S>>(mut new_commit_index: u32, old_commit_index: &mut u32, log: LogRef<'a, S, P>, state_machine: &mut RaftStateMachine<S>) -> &'a [LogEntry<S::Command>] {
     if new_commit_index > *old_commit_index {
         new_commit_index = log.last_log_index().min(new_commit_index);
 
@@ -575,7 +574,7 @@ fn update_commit_index<'a, S: StateMachine, P: PersistentStorage<S>>(mut new_com
     }
 }
 
-fn max_commit<S: StateMachine, P: PersistentStorage<S>>(views: &HashMap<u32, LeaderView>, log: LogRef<S, P>, current_term: u32, commit_index: u32) -> u32 {
+fn max_commit<S: StateMachine, P: Storage<S>>(views: &HashMap<u32, LeaderView>, log: LogRef<S, P>, current_term: u32, commit_index: u32) -> u32 {
     views.iter()
         .map(|(_, v)| v.match_index)
         .filter(|match_index| *match_index > commit_index)
@@ -590,7 +589,7 @@ fn majority_matches(views: &HashMap<u32, LeaderView>, match_index: u32) -> bool 
     match_count > ((views.len() + 1) / 2)
 }
 
-fn try_make_snapshot<S: StateMachine, P: PersistentStorage<S>>(storage: &mut RaftStorage<S, P>, state_machine: &RaftStateMachine<S>, commit_index: u32) {
+fn try_make_snapshot<S: StateMachine, P: Storage<S>>(storage: &mut RaftStorage<S, P>, state_machine: &RaftStateMachine<S>, commit_index: u32) {
     let config = config(storage, state_machine);
     if commit_index - storage.inner().snapshot_last_index() >= config.snapshot_min_log_size {
         storage.set_snapshot(commit_index, storage.log().term(commit_index).unwrap(), state_machine);

@@ -6,7 +6,7 @@ use rand::{Rng, thread_rng};
 
 use crate::timeout::Timeout;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub election_timeout_min: u64,
     pub election_timeout_range: u64,
@@ -37,7 +37,7 @@ impl Config {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NodeAddress {
     SocketAddress(SocketAddr),
     String(String),

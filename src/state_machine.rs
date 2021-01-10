@@ -1,38 +1,22 @@
 use std::collections::HashMap;
 
+use crate::bytes::{TryFromBytes, WriteBytes};
 use crate::config::Config;
-use crate::serialize::{TryFromReader, WriteBytes, TryFromBytes};
 use crate::core::{LogEntry, LogEntryType};
 
-pub trait StateMachine: TryFromReader + WriteBytes {
+pub trait StateMachine: TryFromBytes + WriteBytes {
     type Command: TryFromBytes + WriteBytes;
 
     fn apply_command(&mut self, command: &Self::Command);
 }
 
 pub struct RaftStateMachine<S> {
-    inner: S,
-    config: Config,
-    client_last_command_ids: HashMap<u32, u32>,
+    pub inner: S,
+    pub config: Config,
+    pub client_last_command_ids: HashMap<u32, u32>,
 }
 
 impl<S: StateMachine> RaftStateMachine<S> {
-    pub fn new(config: Config, inner: S) -> RaftStateMachine<S> {
-        RaftStateMachine {
-            inner,
-            config,
-            client_last_command_ids: HashMap::new(),
-        }
-    }
-
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
-
-    pub fn inner(&self) -> &S {
-        &self.inner
-    }
-
     pub fn is_last_client_command(&self, client_id: u32, command_id: u32) -> bool {
         self.client_last_command_ids.get(&client_id).map(|id| *id == command_id).unwrap_or(false)
     }

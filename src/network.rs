@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use crate::bytes::WriteBytes;
 use crate::config::Config;
 use crate::state_machine::StateMachine;
-use crate::serialize::WriteBytes;
 
 pub trait NetworkInterface<S: StateMachine> {
     type ReadRequest;
