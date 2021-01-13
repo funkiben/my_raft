@@ -9,7 +9,8 @@ pub trait NetworkInterface<S: StateMachine> {
 
     fn on_config_update(&mut self, config: &Config);
 
-    fn wait_for_message(&mut self, timeout: Duration, buf: &mut [u8]) -> MessageEvent<S::Command, Self::ReadRequest>;
+    // TODO have network interface own buf somehow?
+    fn wait_for_message(&mut self, timeout: Duration, raft_message: &mut [u8]) -> MessageEvent<S::Command, Self::ReadRequest>;
 
     fn send_raft_message(&mut self, node: u32, msg: impl WriteBytes);
 

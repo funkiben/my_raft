@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
 
-use crate::bytes::WriteBytes;
 use crate::config::Config;
 use crate::state_machine::{RaftStateMachine, StateMachine};
 use crate::storage::log::{Log, LogEntry, LogEntryType, LogMut, LogRef};
@@ -24,7 +23,7 @@ pub trait Storage<S: StateMachine>: Sized {
     fn get_index_of_last_config_in_log(&self) -> Option<usize>;
     fn num_log_entries(&self) -> usize;
 
-    fn set_snapshot(&mut self, last_index: u32, last_term: u32, bytes: &impl WriteBytes);
+    fn set_snapshot(&mut self, last_index: u32, last_term: u32, state_machine: &RaftStateMachine<S>);
 
     fn snapshot(&self) -> RaftStateMachine<S>;
     fn snapshot_last_index(&self) -> u32;
@@ -53,8 +52,8 @@ impl<S: StateMachine, P: Storage<S>> RaftStorage<S, P> {
         }
     }
 
-    pub fn set_snapshot(&mut self, last_index: u32, last_term: u32, bytes: &impl WriteBytes) {
-        self.inner.set_snapshot(last_index, last_term, bytes)
+    pub fn set_snapshot(&mut self, last_index: u32, last_term: u32, snapshot: &RaftStateMachine<S>) {
+        self.inner.set_snapshot(last_index, last_term, snapshot)
     }
 
     pub fn add_new_snapshot_chunk(&mut self, offset: u32, data: &[u8]) {
