@@ -1,6 +1,6 @@
 ### Raft Consensus Algorithm Implementation
 
-An implementation of the Raft consensus algorithm.
+An implementation of the Raft consensus algorithm in Rust.
 
 TODO:
  - Cluster membership changes
