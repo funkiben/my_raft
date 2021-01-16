@@ -17,7 +17,7 @@ pub struct RaftStateMachine<S> {
 }
 
 impl<S: StateMachine> RaftStateMachine<S> {
-    pub fn is_last_client_command(&self, client_id: u32, command_id: u32) -> bool {
+    pub fn is_clients_last_command(&self, client_id: u32, command_id: u32) -> bool {
         self.client_last_command_ids.get(&client_id).map(|id| *id == command_id).unwrap_or(false)
     }
 }

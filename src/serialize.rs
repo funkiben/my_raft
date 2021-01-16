@@ -24,6 +24,8 @@ const NODE_ADDRESS_SOCKET: u8 = 0u8;
 const NODE_ADDRESS_STRING: u8 = 1u8;
 const NODE_ADDRESS_CUSTOM: u8 = 2u8;
 
+// TODO create better write API
+
 impl<C: TryFromBytes> TryFromBytes for LogEntry<C> {
     fn try_from_bytes(mut bytes: impl ReadBytes) -> Option<Self> {
         let term = bytes.next_u32()?;
@@ -221,7 +223,8 @@ impl WriteBytes for Config {
             election_timeout_range,
             heartbeat_timeout,
             rpc_response_timeout,
-            max_message_bytes,
+            max_entries_in_append_entries,
+            max_bytes_in_install_snapshot,
             next_index_decrease_rate,
             snapshot_min_log_size,
             id,
@@ -231,7 +234,8 @@ impl WriteBytes for Config {
         amt += writer.write(&election_timeout_range.to_be_bytes())?;
         amt += writer.write(&heartbeat_timeout.to_be_bytes())?;
         amt += writer.write(&rpc_response_timeout.to_be_bytes())?;
-        amt += writer.write(&max_message_bytes.to_be_bytes())?;
+        amt += writer.write(&max_entries_in_append_entries.to_be_bytes())?;
+        amt += writer.write(&max_bytes_in_install_snapshot.to_be_bytes())?;
         amt += writer.write(&next_index_decrease_rate.to_be_bytes())?;
         amt += writer.write(&snapshot_min_log_size.to_be_bytes())?;
         amt += writer.write(&id.to_be_bytes())?;
@@ -250,7 +254,8 @@ impl TryFromBytes for Config {
         let election_timeout_range = bytes.next_u64()?;
         let heartbeat_timeout = bytes.next_u64()?;
         let rpc_response_timeout = bytes.next_u64()?;
-        let max_message_bytes = bytes.next_u32()?;
+        let max_entries_in_append_entries = bytes.next_u32()?;
+        let max_bytes_in_install_snapshot = bytes.next_u32()?;
         let next_index_decrease_rate = bytes.next_u32()?;
         let snapshot_min_log_size = bytes.next_u32()?;
         let id = bytes.next_u32()?;
@@ -269,7 +274,8 @@ impl TryFromBytes for Config {
             election_timeout_range,
             heartbeat_timeout,
             rpc_response_timeout,
-            max_message_bytes,
+            max_entries_in_append_entries,
+            max_bytes_in_install_snapshot,
             next_index_decrease_rate,
             snapshot_min_log_size,
             id,
@@ -410,7 +416,8 @@ mod tests {
             election_timeout_range: 654743008347,
             heartbeat_timeout: 564563,
             rpc_response_timeout: 3463462,
-            max_message_bytes: 24532573,
+            max_bytes_in_install_snapshot: 24532573,
+            max_entries_in_append_entries: 54345,
             next_index_decrease_rate: 543,
             snapshot_min_log_size: 54326,
             id: 986543,
@@ -424,7 +431,8 @@ mod tests {
             election_timeout_range: 654743008347,
             heartbeat_timeout: 564563,
             rpc_response_timeout: 3463462,
-            max_message_bytes: 24532573,
+            max_bytes_in_install_snapshot: 32,
+            max_entries_in_append_entries: 543,
             next_index_decrease_rate: 543,
             snapshot_min_log_size: 54326,
             id: 986543,
@@ -439,7 +447,7 @@ mod tests {
             LogEntry { term: 1, entry_type: LogEntryType::Config(dummy_config()) },
             LogEntry { term: 32, entry_type: LogEntryType::Command { command: DummyData("yo".as_bytes().to_vec()), client_id: 0, command_id: 98 } },
             LogEntry { term: 542, entry_type: LogEntryType::Config(dummy_config()) },
-            LogEntry { term: 64, entry_type: LogEntryType::Command { command: DummyData("sethefwegfwrehg".as_bytes().to_vec()), client_id: 42, command_id: 7 } },
+            LogEntry { term: 64, entry_type: LogEntryType::Command { command: DummyData("sethefwegfwrehg".as_bytes().to_vec()), client_id: 432, command_id: 7000 } },
             LogEntry { term: 3, entry_type: LogEntryType::Noop },
             LogEntry { term: 9999, entry_type: LogEntryType::Config(dummy_config_no_nodes()) },
         ]

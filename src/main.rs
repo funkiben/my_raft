@@ -6,23 +6,24 @@ use std::time::Duration;
 
 use my_raft::bytes::{ReadBytes, TryFromBytes, WriteBytes};
 use my_raft::config::{Config, NodeAddress};
-use my_raft::network::{MessageEvent, NetworkInterface};
+use my_raft::network::{MessageEvent, NetworkInterface, ClientRequest};
 use my_raft::state_machine::StateMachine;
+
+const PACKET_SIZE: usize = 65527;
 
 fn main() {}
 
 struct UdpNetwork {
     addresses: HashMap<u32, SocketAddr>,
     socket: UdpSocket,
-    write_buffer: Vec<u8>,
+    write_buffer: [u8; PACKET_SIZE],
 }
 
 impl NetworkInterface<KVStore> for UdpNetwork {
     type ReadRequest = KVStoreReadRequest;
 
-    fn on_config_update(&mut self, Config { id, nodes, max_message_bytes, .. }: &Config) {
+    fn on_config_update(&mut self, Config { id, nodes, .. }: &Config) {
         self.addresses.clear();
-        self.write_buffer.resize_with(*max_message_bytes as usize, || 0u8);
 
         let my_addr = get_ip_addr(nodes.get(id).unwrap());
         self.socket = UdpSocket::bind(my_addr).unwrap();
@@ -31,10 +32,10 @@ impl NetworkInterface<KVStore> for UdpNetwork {
         }
     }
 
-    fn wait_for_message(&mut self, timeout: Duration, buf: &mut [u8]) -> MessageEvent<KVStoreCommand, KVStoreReadRequest> {
+    fn wait_for_message(&mut self, timeout: Duration, buf: &mut Vec<u8>) -> MessageEvent<KVStoreCommand, KVStoreReadRequest> {
         self.socket.set_read_timeout(Some(timeout)).unwrap();
         match self.socket.recv_from(buf) {
-            Ok((size, src)) => MessageEvent::Node { size, src_node_id: find_node_id_given_address(&self.addresses, src) },
+            Ok((.., src)) => MessageEvent::Node { src_node_id: find_node_id_given_address(&self.addresses, src) },
             Err(err) if err.kind() == ErrorKind::TimedOut => MessageEvent::Timeout,
             Err(_) => panic!()
         }
@@ -46,23 +47,24 @@ impl NetworkInterface<KVStore> for UdpNetwork {
         // });
     }
 
-    fn send_raft_message(&mut self, node: u32, msg: impl WriteBytes) {
-        msg.write_bytes(&mut self.write_buffer).unwrap_or_default();
+    fn send_raft_message(&mut self, node: u32, _leader_id: Option<u32>, msg: impl WriteBytes) {
+        msg.write_bytes(self.write_buffer.as_mut()).unwrap_or_default();
         self.socket.send_to(&self.write_buffer, *self.addresses.get(&node).unwrap()).unwrap_or_default();
     }
 
-    fn handle_command_executed(&mut self, client_id: u32, request_id: u32, state_machine: &KVStore) {
+    fn handle_command_applied(&mut self, request: ClientRequest<&<KVStore as StateMachine>::Command>, state_machine: &KVStore) {
         unimplemented!()
     }
 
-    fn handle_read(&mut self, client_id: u32, request_id: u32, request: KVStoreReadRequest, state_machine: &KVStore) {
-        match request {
-            KVStoreReadRequest::Get(key) => {}
-            KVStoreReadRequest::Size => {}
-        }
+    fn handle_ready_to_read(&mut self, request: ClientRequest<Self::ReadRequest>, state_machine: &KVStore) {
+        unimplemented!()
     }
 
-    fn redirect(&mut self, leader_id: u32, client_id: u32, request_id: u32) {
+    fn redirect_command_request(&mut self, leader_id: u32, request: ClientRequest<<KVStore as StateMachine>::Command>) {
+        unimplemented!()
+    }
+
+    fn redirect_read_request(&mut self, leader_id: u32, request: ClientRequest<Self::ReadRequest>) {
         unimplemented!()
     }
 }

@@ -12,7 +12,8 @@ pub struct Config {
     pub election_timeout_range: u64,
     pub heartbeat_timeout: u64,
     pub rpc_response_timeout: u64,
-    pub max_message_bytes: u32,
+    pub max_entries_in_append_entries: u32,
+    pub max_bytes_in_install_snapshot: u32,
     pub next_index_decrease_rate: u32,
     pub snapshot_min_log_size: u32,
     pub id: u32,
@@ -33,7 +34,7 @@ impl Config {
     }
 
     pub fn other_node_ids(&self) -> impl Iterator<Item=u32> + '_ {
-        self.nodes.iter().map(|(n, _)| *n).filter(move |n| *n != self.id)
+        self.nodes.keys().map(|n| *n).filter(move |n| *n != self.id)
     }
 }
 
