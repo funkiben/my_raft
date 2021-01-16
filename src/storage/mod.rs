@@ -31,7 +31,7 @@ pub trait Storage<S: StateMachine>: Sized {
 
     fn add_new_snapshot_chunk(&mut self, offset: u32, data: &[u8]);
     fn try_use_chunks_as_new_snapshot(&mut self, last_index: u32, last_term: u32) -> Option<RaftStateMachine<S>>;
-    fn snapshot_chunk(&self, offset: u32, amt: u32) -> Option<&[u8]>;
+    fn snapshot_chunk(&self, offset: u32, amt: u32) -> &[u8];
 
     fn total_snapshot_bytes(&self) -> u32;
 

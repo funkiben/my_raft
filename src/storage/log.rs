@@ -191,7 +191,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn snapshot_chunk(&self, _offset: u32, _amt: u32) -> Option<&[u8]> {
+        fn snapshot_chunk(&self, _offset: u32, _amt: u32) -> &[u8] {
             unimplemented!()
         }
 
@@ -379,5 +379,20 @@ mod tests {
         assert_eq!(entries[2].term, 5);
         assert_eq!(log.last_index(), 3);
         assert_eq!(log.last_term(), 5);
+    }
+
+    #[test]
+    fn snapshot_empty() {
+        let storage = create_storage(4, 6);
+        let log = storage.log();
+        assert_eq!(log.last_index(), 4);
+        assert_eq!(log.last_term(), 6);
+        assert_eq!(log.term(4), Some(6));
+        assert_eq!(log.term(5), None);
+        assert!(log.entries(0).is_none());
+        assert!(log.entries(1).is_none());
+        assert!(log.entries(2).is_none());
+        assert!(log.entries(4).is_none());
+        assert_eq!(log.entries(5).unwrap().len(), 0);
     }
 }

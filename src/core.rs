@@ -495,7 +495,7 @@ impl LeaderView {
             last_included_index: storage.inner().snapshot_last_index(),
             last_included_term: storage.inner().snapshot_last_term(),
             offset,
-            data: storage.inner().snapshot_chunk(offset, amt).unwrap(),
+            data: storage.inner().snapshot_chunk(offset, amt),
             done: offset + amt >= total_bytes,
         })
     }
@@ -586,7 +586,9 @@ fn majority_matches(views: &HashMap<u32, LeaderView>, match_index: u32) -> bool 
 fn try_make_snapshot<S: StateMachine, P: Storage<S>>(storage: &mut RaftStorage<S, P>, state_machine: &RaftStateMachine<S>, commit_index: u32) {
     let config = config(storage, state_machine);
     if commit_index - storage.inner().snapshot_last_index() >= config.snapshot_min_log_size {
-        storage.set_snapshot(commit_index, storage.log().term(commit_index).unwrap(), state_machine);
+        eprintln!("creating snapshot");
+        let last_term = storage.log().term(commit_index).unwrap();
         storage.log_mut().remove_entries_before(commit_index);
+        storage.set_snapshot(commit_index, last_term, state_machine);
     }
 }
