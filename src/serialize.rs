@@ -427,8 +427,8 @@ mod tests {
 
     fn dummy_config_no_nodes() -> Config {
         Config {
-            election_timeout_min: 4530000006,
-            election_timeout_range: 654743008347,
+            election_timeout_min: 40006,
+            election_timeout_range: 6530047,
             heartbeat_timeout: 564563,
             rpc_response_timeout: 3463462,
             max_bytes_in_install_snapshot: 32,
@@ -674,7 +674,7 @@ mod tests {
 
         let write_amt = expected.write_bytes(&mut buf).unwrap();
 
-        let mut bytes = BytesRef::new(&buf);
+        let mut bytes = BytesRef::new(&buf[..write_amt]);
         let actual = RaftStateMachine::<DummyData>::try_from_bytes(&mut bytes).unwrap();
 
         assert_eq!(write_amt, bytes.read_amount());
@@ -695,7 +695,7 @@ mod tests {
 
         let write_amt = expected.write_bytes(&mut buf).unwrap();
 
-        let mut bytes = BytesRef::new(&buf);
+        let mut bytes = BytesRef::new(&buf[..write_amt]);
         let actual = RaftStateMachine::<DummyData>::try_from_bytes(&mut bytes).unwrap();
 
         assert_eq!(write_amt, bytes.read_amount());

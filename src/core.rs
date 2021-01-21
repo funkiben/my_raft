@@ -56,7 +56,7 @@ enum CandidateView {
     Waiting(Timeout),
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum TimeoutType {
     ElectionTimeout,
     HeartbeatTimeout(u32),
@@ -189,7 +189,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
                 self.network.send_raft_message(src_node_id, Some(src_node_id), Message::AppendEntriesResponse { term: self.storage.inner().current_term(), success: true, match_index });
 
                 update_commit_index(leader_commit, &mut self.commit_index, self.storage.log(), &mut self.state_machine);
-                try_make_snapshot(&mut self.storage, &self.state_machine, self.commit_index);
+                make_snapshot_if_enough_commits(&mut self.storage, &self.state_machine, self.commit_index);
 
                 return;
             }
@@ -244,7 +244,10 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
                     }
                 }
 
-                try_make_snapshot(&mut self.storage, &self.state_machine, self.commit_index);
+                // TODO clean this up
+                if !has_outstanding_install_snapshots(&views) {
+                    make_snapshot_if_enough_commits(&mut self.storage, &self.state_machine, self.commit_index);
+                }
             }
         }
     }
@@ -313,14 +316,16 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
         let success = if self.check_term_and_update_self(term) {
             self.receive_message_from_leader(src_node_id);
 
-            self.storage.add_new_snapshot_chunk(offset, data);
+            if self.storage.inner().snapshot_last_index() != last_included_index || self.storage.inner().snapshot_last_term() != last_included_term {
+                self.storage.add_new_snapshot_chunk(offset, data);
 
-            if done {
-                if let Some(new_state_machine) = self.storage.try_use_chunks_as_new_snapshot(last_included_index, last_included_term) {
-                    self.storage.log_mut().remove_entries_before(last_included_index + 1);
-                    self.state_machine = new_state_machine;
-                    self.commit_index = last_included_index;
-                    self.network.on_config_update(config(&self.storage, &self.state_machine));
+                if done {
+                    if let Some(new_state_machine) = self.storage.try_use_chunks_as_new_snapshot(last_included_index, last_included_term) {
+                        self.storage.log_mut().clear();
+                        self.state_machine = new_state_machine;
+                        self.commit_index = last_included_index;
+                        self.network.on_config_update(config(&self.storage, &self.state_machine));
+                    }
                 }
             }
 
@@ -387,7 +392,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
 
     fn handle_election_timeout(&mut self) {
         self.storage.set_current_term(self.storage.inner().current_term() + 1);
-        self.storage.set_voted_for(None);
+        self.storage.set_voted_for(Some(self.config().id));
         self.role = Role::Candidate {
             election_timeout: self.config().new_election_timeout(),
             views: self.config().other_node_ids().map(|n| (n, CandidateView::Waiting(self.config().new_rpc_response_timeout()))).collect(),
@@ -417,7 +422,10 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
                     Some(OutstandingRPC::AppendEntries { index }) => index,
                     _ => self.storage.log().last_index() + 1
                 };
-                view.try_send_append_entries(node_id, &mut self.network, &self.storage, config, self.commit_index, index);
+
+                if !view.try_send_append_entries(node_id, &mut self.network, &self.storage, config, self.commit_index, index) {
+                    view.send_install_snapshot(node_id, &mut self.network, &self.storage, config, 0);
+                }
             }
         }
     }
@@ -583,12 +591,18 @@ fn majority_matches(views: &HashMap<u32, LeaderView>, match_index: u32) -> bool 
     match_count > ((views.len() + 1) / 2)
 }
 
-fn try_make_snapshot<S: StateMachine, P: Storage<S>>(storage: &mut RaftStorage<S, P>, state_machine: &RaftStateMachine<S>, commit_index: u32) {
+fn has_outstanding_install_snapshots(views: &HashMap<u32, LeaderView>) -> bool {
+    views.values().any(|v| match v.outstanding_rpc {
+        Some(OutstandingRPC::InstallSnapshot { .. }) => true,
+        _ => false
+    })
+}
+
+fn make_snapshot_if_enough_commits<S: StateMachine, P: Storage<S>>(storage: &mut RaftStorage<S, P>, state_machine: &RaftStateMachine<S>, commit_index: u32) {
     let config = config(storage, state_machine);
     if commit_index - storage.inner().snapshot_last_index() >= config.snapshot_min_log_size {
-        eprintln!("creating snapshot");
         let last_term = storage.log().term(commit_index).unwrap();
-        storage.log_mut().remove_entries_before(commit_index);
+        storage.log_mut().remove_entries_before(commit_index + 1);
         storage.set_snapshot(commit_index, last_term, state_machine);
     }
 }

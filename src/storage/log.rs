@@ -66,6 +66,11 @@ impl<'a, S: StateMachine, P: Storage<S>> Log<&'a mut RaftStorage<S, P>> {
         self.0.save_log();
     }
 
+    pub fn clear(&mut self) {
+        self.0.remove_log_entries_starting_at(0);
+        self.0.save_log();
+    }
+
     pub fn immut(&self) -> Log<&RaftStorage<S, P>> {
         Log(self.0)
     }
@@ -394,5 +399,31 @@ mod tests {
         assert!(log.entries(2).is_none());
         assert!(log.entries(4).is_none());
         assert_eq!(log.entries(5).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn snapshot_with_entries() {
+        let mut storage = create_storage(4, 6);
+
+        storage.set_current_term(10);
+        storage.log_mut().add_entry(LogEntryType::Noop);
+        storage.set_current_term(11);
+        storage.log_mut().add_entry(LogEntryType::Command { client_id: 0, command_id: 1, command: MockCommand });
+        storage.set_current_term(12);
+        storage.log_mut().add_entry(LogEntryType::Noop);
+
+        let log = storage.log();
+
+        assert_eq!(log.last_index(), 7);
+        assert_eq!(log.last_term(), 12);
+        assert_eq!(log.term(4), Some(6));
+        assert_eq!(log.term(5), Some(10));
+        assert_eq!(log.term(6), Some(11));
+        assert_eq!(log.term(7), Some(12));
+        assert!(log.entries(4).is_none());
+        assert_eq!(log.entries(5).unwrap().len(), 3);
+        assert_eq!(log.entries(6).unwrap().len(), 2);
+        assert_eq!(log.entries(7).unwrap().len(), 1);
+        assert_eq!(log.entries(8).unwrap().len(), 0);
     }
 }
