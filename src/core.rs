@@ -210,7 +210,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
 
             let mut next_index = match view.outstanding_rpc {
                 Some(OutstandingRPC::AppendEntries { index }) => index,
-                _ => panic!()
+                _ => panic!() // TODO return here instead of panic? response could have been delayed a lot
             };
 
             if success {
