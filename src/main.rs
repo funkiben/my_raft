@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use my_raft::bytes::{ReadBytes, TryFromBytes, WriteBytes};
 use my_raft::config::{Config, NodeAddress};
-use my_raft::network::{MessageEvent, NetworkInterface, ClientRequest};
+use my_raft::network::{MessageEvent, NetworkInterface, ClientCommandRequest};
 use my_raft::state_machine::StateMachine;
 
 const PACKET_SIZE: usize = 65527;
@@ -52,19 +52,19 @@ impl NetworkInterface<KVStore> for UdpNetwork {
         self.socket.send_to(&self.write_buffer, *self.addresses.get(&node).unwrap()).unwrap_or_default();
     }
 
-    fn handle_command_applied(&mut self, request: ClientRequest<&<KVStore as StateMachine>::Command>, state_machine: &KVStore) {
+    fn handle_command_applied(&mut self, request: ClientCommandRequest<&<KVStore as StateMachine>::Command>, state_machine: &KVStore) {
         unimplemented!()
     }
 
-    fn handle_ready_to_read(&mut self, request: ClientRequest<Self::ReadRequest>, state_machine: &KVStore) {
+    fn handle_ready_to_read(&mut self, request: Self::ReadRequest, state_machine: &KVStore) {
         unimplemented!()
     }
 
-    fn redirect_command_request(&mut self, leader_id: u32, request: ClientRequest<<KVStore as StateMachine>::Command>) {
+    fn redirect_command_request(&mut self, leader_id: u32, request: ClientCommandRequest<<KVStore as StateMachine>::Command>) {
         unimplemented!()
     }
 
-    fn redirect_read_request(&mut self, leader_id: u32, request: ClientRequest<Self::ReadRequest>) {
+    fn redirect_read_request(&mut self, leader_id: u32, req: Self::ReadRequest) {
         unimplemented!()
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::bytes::{BytesRef, ReadBytes};
 use crate::config::Config;
 use crate::message::{Message, OutgoingAppendEntries};
-use crate::network::{ClientRequest, MessageEvent, NetworkInterface};
+use crate::network::{ClientCommandRequest, MessageEvent, NetworkInterface};
 use crate::state_machine::{RaftStateMachine, StateMachine};
 use crate::storage::{RaftStorage, Storage};
 use crate::storage::log::{LogEntry, LogEntryType, LogMut, LogRef};
@@ -17,8 +17,8 @@ pub struct Raft<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> {
     commit_index: u32,
     state_machine: RaftStateMachine<S>,
     role: Role,
-    command_request_queue: Vec<ClientRequest<S::Command>>,
-    read_request_queue: Vec<ClientRequest<N::ReadRequest>>,
+    command_request_queue: Vec<ClientCommandRequest<S::Command>>,
+    read_request_queue: Vec<N::ReadRequest>,
 }
 
 enum Role {
@@ -66,8 +66,8 @@ enum TimeoutType {
 enum Event<'a, C, R> {
     Timeout(TimeoutType),
     NodeMessage(u32, Message<'a>),
-    ClientCommand(ClientRequest<C>),
-    ClientRead(ClientRequest<R>),
+    ClientCommand(ClientCommandRequest<C>),
+    ClientRead(R),
 }
 
 impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
@@ -234,7 +234,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
                 let new_commit_index = max_commit(views, self.storage.log(), self.storage.inner().current_term(), self.commit_index);
                 for entry in update_commit_index(new_commit_index, &mut self.commit_index, self.storage.log(), &mut self.state_machine) {
                     if let LogEntryType::Command { client_id, command_id, ref command } = entry.entry_type {
-                        self.network.handle_command_applied(ClientRequest { client_id, request_id: command_id, data: command }, &self.state_machine.inner)
+                        self.network.handle_command_applied(ClientCommandRequest { client_id, request_id: command_id, command: command }, &self.state_machine.inner)
                     }
                 }
 
@@ -362,7 +362,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
         }
     }
 
-    fn handle_client_command_request(&mut self, req: ClientRequest<S::Command>) {
+    fn handle_client_command_request(&mut self, req: ClientCommandRequest<S::Command>) {
         if let Role::Leader { ref mut views, .. } = self.role {
             if try_append_new_client_command_to_log(&mut self.network, self.storage.log_mut(), self.commit_index, &self.state_machine, req) {
                 let config = config(&self.storage, &self.state_machine);
@@ -380,7 +380,7 @@ impl<S: StateMachine, P: Storage<S>, N: NetworkInterface<S>> Raft<S, P, N> {
         }
     }
 
-    fn handle_client_read_request(&mut self, req: ClientRequest<N::ReadRequest>) {
+    fn handle_client_read_request(&mut self, req: N::ReadRequest) {
         match self.role {
             Role::Leader { noop_index, .. } if self.commit_index >= noop_index => self.network.handle_ready_to_read(req, &self.state_machine.inner),
             Role::Follower { leader_id: Some(leader_id), .. } => self.network.redirect_read_request(leader_id, req),
@@ -542,7 +542,7 @@ fn has_majority_votes(others: &HashMap<u32, CandidateView>) -> bool {
 }
 
 fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>, P: Storage<S>>
-(network: &mut N, mut log: LogMut<S, P>, commit_index: u32, state_machine: &RaftStateMachine<S>, req: ClientRequest<S::Command>) -> bool {
+(network: &mut N, mut log: LogMut<S, P>, commit_index: u32, state_machine: &RaftStateMachine<S>, req: ClientCommandRequest<S::Command>) -> bool {
     // ignore request if we already have it but haven't committed it yet
     if log.immut().has_uncommitted_command_from_client(commit_index, req.client_id, req.request_id) {
         return false;
@@ -550,11 +550,11 @@ fn try_append_new_client_command_to_log<S: StateMachine, N: NetworkInterface<S>,
 
     // reply immediately if request has already been committed
     if state_machine.is_clients_last_command(req.client_id, req.request_id) {
-        network.handle_command_applied(ClientRequest { client_id: req.client_id, request_id: req.request_id, data: &req.data }, &state_machine.inner);
+        network.handle_command_applied(ClientCommandRequest { client_id: req.client_id, request_id: req.request_id, command: &req.command }, &state_machine.inner);
         return false;
     }
 
-    log.add_entry(LogEntryType::Command { command: req.data, client_id: req.client_id, command_id: req.request_id });
+    log.add_entry(LogEntryType::Command { command: req.command, client_id: req.client_id, command_id: req.request_id });
     true
 }
 
