@@ -4,9 +4,9 @@ use std::io::{ErrorKind, Write};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
-use my_raft::bytes::{ReadBytes, TryFromBytes, WriteBytes};
+use my_raft::bytes::{BytesWriter, ReadBytes, TryFromBytes, WriteBytes};
 use my_raft::config::{Config, NodeAddress};
-use my_raft::network::{MessageEvent, NetworkInterface, ClientCommandRequest};
+use my_raft::network::{ClientCommandRequest, MessageEvent, NetworkInterface};
 use my_raft::state_machine::StateMachine;
 
 const PACKET_SIZE: usize = 65527;
@@ -48,7 +48,7 @@ impl NetworkInterface<KVStore> for UdpNetwork {
     }
 
     fn send_raft_message(&mut self, node: u32, _leader_id: Option<u32>, msg: impl WriteBytes) {
-        msg.write_bytes(self.write_buffer.as_mut()).unwrap_or_default();
+        msg.write_bytes_with_writer(self.write_buffer.as_mut()).unwrap_or_default();
         self.socket.send_to(&self.write_buffer, *self.addresses.get(&node).unwrap()).unwrap_or_default();
     }
 
@@ -105,7 +105,7 @@ enum KVStoreReadRequest {
 
 
 impl WriteBytes for KVStore {
-    fn write_bytes(&self, writer: impl Write) -> io::Result<usize> {
+    fn write_bytes<W: Write>(&self, _writer: &mut BytesWriter<W>) -> io::Result<()> {
         unimplemented!()
     }
 }
@@ -117,7 +117,7 @@ impl TryFromBytes for KVStore {
 }
 
 impl WriteBytes for KVStoreCommand {
-    fn write_bytes(&self, writer: impl Write) -> io::Result<usize> {
+    fn write_bytes<W: Write>(&self, _writer: &mut BytesWriter<W>) -> io::Result<()> {
         unimplemented!()
     }
 }

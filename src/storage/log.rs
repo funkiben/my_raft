@@ -124,7 +124,7 @@ mod tests {
     use std::io;
     use std::io::Write;
 
-    use crate::bytes::{ReadBytes, TryFromBytes, WriteBytes};
+    use crate::bytes::{BytesWriter, ReadBytes, TryFromBytes, WriteBytes};
     use crate::state_machine::{RaftStateMachine, StateMachine};
     use crate::storage::{RaftStorage, Storage};
     use crate::storage::log::{LogEntry, LogEntryType};
@@ -137,7 +137,7 @@ mod tests {
         log: Vec<LogEntry<MockCommand>>,
         last_snapshot_index: u32,
         last_snapshot_term: u32,
-        current_term: u32
+        current_term: u32,
     }
 
     impl Storage<MockStateMachine> for MockStorage {
@@ -236,7 +236,7 @@ mod tests {
     }
 
     impl WriteBytes for MockStateMachine {
-        fn write_bytes(&self, _writer: impl Write) -> io::Result<usize> {
+        fn write_bytes<W: Write>(&self, _writer: &mut BytesWriter<W>) -> io::Result<()> {
             unimplemented!()
         }
     }
@@ -248,7 +248,7 @@ mod tests {
     }
 
     impl WriteBytes for MockCommand {
-        fn write_bytes(&self, _writer: impl Write) -> io::Result<usize> {
+        fn write_bytes<W: Write>(&self, _writer: &mut BytesWriter<W>) -> io::Result<()> {
             unimplemented!()
         }
     }
@@ -258,7 +258,7 @@ mod tests {
             log: vec![],
             last_snapshot_index,
             last_snapshot_term,
-            current_term: 0
+            current_term: 0,
         })
     }
 

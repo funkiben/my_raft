@@ -1,13 +1,15 @@
 use std::io;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 
-pub fn bool_to_byte(b: bool) -> [u8; 1] {
-    if b { [1u8] } else { [0u8] }
-}
-
 pub trait WriteBytes {
-    fn write_bytes(&self, writer: impl io::Write) -> io::Result<usize>;
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()>;
+
+    fn write_bytes_with_writer(&self, writer: impl Write) -> io::Result<usize> {
+        let mut writer = BytesWriter::new(writer);
+        self.write_bytes(&mut writer)?;
+        Ok(writer.bytes_written())
+    }
 }
 
 pub trait TryFromBytes: Sized {
@@ -177,5 +179,50 @@ impl<R: ReadBytes, T: TryFromBytes> Iterator for BytesIterator<R, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
+    }
+}
+
+pub struct BytesWriter<W> {
+    writer: W,
+    written: usize,
+}
+
+impl<W> BytesWriter<W> {
+    pub fn new(writer: W) -> BytesWriter<W> {
+        BytesWriter {
+            writer,
+            written: 0,
+        }
+    }
+}
+
+impl<W: Write> BytesWriter<W> {
+    pub fn write_u8(&mut self, n: u8) -> io::Result<()> {
+        self.write(&[n])
+    }
+
+    pub fn write_u16(&mut self, n: u16) -> io::Result<()> {
+        self.write(&n.to_be_bytes())
+    }
+
+    pub fn write_u32(&mut self, n: u32) -> io::Result<()> {
+        self.write(&n.to_be_bytes())
+    }
+
+    pub fn write_u64(&mut self, n: u64) -> io::Result<()> {
+        self.write(&n.to_be_bytes())
+    }
+
+    pub fn write_bool(&mut self, b: bool) -> io::Result<()> {
+        self.write(if b { &[1] } else { &[0] })
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> io::Result<()> {
+        self.written += self.writer.write(data)?;
+        Ok(())
+    }
+
+    pub fn bytes_written(&self) -> usize {
+        self.written
     }
 }

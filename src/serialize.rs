@@ -3,7 +3,7 @@ use std::io;
 use std::io::Write;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use crate::bytes::{bool_to_byte, BytesRef, ReadBytes, TryFromBytes, WriteBytes};
+use crate::bytes::{BytesRef, BytesWriter, ReadBytes, TryFromBytes, WriteBytes};
 use crate::config::{Config, NodeAddress};
 use crate::message::{Message, OutgoingAppendEntries};
 use crate::state_machine::{RaftStateMachine, StateMachine};
@@ -53,37 +53,34 @@ impl<C: TryFromBytes> TryFromBytes for LogEntryType<C> {
 }
 
 impl<C: WriteBytes> WriteBytes for LogEntry<C> {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-        let mut amt = writer.write(&self.term.to_be_bytes())?;
-        amt += self.entry_type.write_bytes(writer)?;
-        Ok(amt)
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
+        writer.write_u32(self.term)?;
+        self.entry_type.write_bytes(writer)
     }
 }
 
 impl<C: WriteBytes> WriteBytes for LogEntryType<C> {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-        let mut amt = 0;
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
         match self {
             LogEntryType::Command { client_id, command_id, command } => {
-                amt += writer.write(&[LOG_ENTRY_COMMAND_ID])?;
-                amt += writer.write(&client_id.to_be_bytes())?;
-                amt += writer.write(&command_id.to_be_bytes())?;
-                amt += command.write_bytes(writer)?;
+                writer.write_u8(LOG_ENTRY_COMMAND_ID)?;
+                writer.write_u32(*client_id)?;
+                writer.write_u32(*command_id)?;
+                command.write_bytes(writer)
             }
             LogEntryType::Noop => {
-                amt += writer.write(&[LOG_ENTRY_NOOP_ID])?;
+                writer.write_u8(LOG_ENTRY_NOOP_ID)
             }
             LogEntryType::Config(config) => {
-                amt += writer.write(&[LOG_ENTRY_CONFIG_ID])?;
-                amt += config.write_bytes(writer)?;
+                writer.write_u8(LOG_ENTRY_CONFIG_ID)?;
+                config.write_bytes(writer)
             }
         }
-        Ok(amt)
     }
 }
 
 impl<'a> Message<'a> {
-    pub(crate) fn try_from_bytes(bytes: &'a [u8]) -> Option<Message<'a>> {
+    pub fn try_from_bytes(bytes: &'a [u8]) -> Option<Message<'a>> {
         let mut bytes = BytesRef::new(bytes);
         match bytes.next_u8()? {
             MESSAGE_APPEND_ENTRIES_ID =>
@@ -132,50 +129,48 @@ impl<'a> Message<'a> {
 
 
 impl<'a> WriteBytes for Message<'a> {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-        let mut amt = 0;
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
         match self {
             Message::AppendEntries { term, prev_log_index, prev_log_term, leader_commit, entries } => {
-                amt += writer.write(&[MESSAGE_APPEND_ENTRIES_ID])?;
-                amt += writer.write(&term.to_be_bytes())?;
-                amt += writer.write(&prev_log_index.to_be_bytes())?;
-                amt += writer.write(&prev_log_term.to_be_bytes())?;
-                amt += writer.write(&leader_commit.to_be_bytes())?;
-                amt += writer.write(entries)?;
+                writer.write_u8(MESSAGE_APPEND_ENTRIES_ID)?;
+                writer.write_u32(*term)?;
+                writer.write_u32(*prev_log_index)?;
+                writer.write_u32(*prev_log_term)?;
+                writer.write_u32(*leader_commit)?;
+                writer.write(entries)
             }
             Message::AppendEntriesResponse { term, match_index, success } => {
-                amt += writer.write(&[MESSAGE_APPEND_ENTRIES_RESPONSE_ID])?;
-                amt += writer.write(&term.to_be_bytes())?;
-                amt += writer.write(&match_index.to_be_bytes())?;
-                amt += writer.write(&bool_to_byte(*success))?;
+                writer.write_u8(MESSAGE_APPEND_ENTRIES_RESPONSE_ID)?;
+                writer.write_u32(*term)?;
+                writer.write_u32(*match_index)?;
+                writer.write_bool(*success)
             }
             Message::RequestVote { term, last_log_index, last_log_term } => {
-                amt += writer.write(&[MESSAGE_REQUEST_VOTE_ID])?;
-                amt += writer.write(&term.to_be_bytes())?;
-                amt += writer.write(&last_log_index.to_be_bytes())?;
-                amt += writer.write(&last_log_term.to_be_bytes())?;
+                writer.write_u8(MESSAGE_REQUEST_VOTE_ID)?;
+                writer.write_u32(*term)?;
+                writer.write_u32(*last_log_index)?;
+                writer.write_u32(*last_log_term)
             }
             Message::RequestVoteResponse { term, vote_granted } => {
-                amt += writer.write(&[MESSAGE_REQUEST_VOTE_RESPONSE_ID])?;
-                amt += writer.write(&term.to_be_bytes())?;
-                amt += writer.write(if *vote_granted { &[1u8] } else { &[0u8] })?;
+                writer.write_u8(MESSAGE_REQUEST_VOTE_RESPONSE_ID)?;
+                writer.write_u32(*term)?;
+                writer.write_bool(*vote_granted)
             }
             Message::InstallSnapshot { term, last_included_index, last_included_term, offset, done, data } => {
-                amt += writer.write(&[MESSAGE_INSTALL_SNAPSHOT_ID])?;
-                amt += writer.write(&term.to_be_bytes())?;
-                amt += writer.write(&last_included_index.to_be_bytes())?;
-                amt += writer.write(&last_included_term.to_be_bytes())?;
-                amt += writer.write(&offset.to_be_bytes())?;
-                amt += writer.write(&bool_to_byte(*done))?;
-                amt += writer.write(data)?;
+                writer.write_u8(MESSAGE_INSTALL_SNAPSHOT_ID)?;
+                writer.write_u32(*term)?;
+                writer.write_u32(*last_included_index)?;
+                writer.write_u32(*last_included_term)?;
+                writer.write_u32(*offset)?;
+                writer.write_bool(*done)?;
+                writer.write(data)
             }
             Message::InstallSnapshotResponse { term, success } => {
-                amt += writer.write(&[MESSAGE_INSTALL_SNAPSHOT_RESPONSE_ID])?;
-                amt += writer.write(&term.to_be_bytes())?;
-                amt += writer.write(&bool_to_byte(*success))?;
+                writer.write_u8(MESSAGE_INSTALL_SNAPSHOT_RESPONSE_ID)?;
+                writer.write_u32(*term)?;
+                writer.write_bool(*success)
             }
-        };
-        Ok(amt)
+        }
     }
 }
 
@@ -202,22 +197,20 @@ impl<S: StateMachine> TryFromBytes for RaftStateMachine<S> {
 }
 
 impl<S: StateMachine> WriteBytes for RaftStateMachine<S> {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-        let mut amt = writer.write(&(self.client_last_command_ids.len() as u32).to_be_bytes())?;
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
+        writer.write_u32(self.client_last_command_ids.len() as u32)?;
         for (client_id, command_id) in &self.client_last_command_ids {
-            amt += writer.write(&client_id.to_be_bytes())?;
-            amt += writer.write(&command_id.to_be_bytes())?;
+            writer.write_u32(*client_id)?;
+            writer.write_u32(*command_id)?;
         }
 
-        amt += self.config.write_bytes(&mut writer)?;
-        amt += self.inner.write_bytes(&mut writer)?;
-
-        Ok(amt)
+        self.config.write_bytes(writer)?;
+        self.inner.write_bytes(writer)
     }
 }
 
 impl WriteBytes for Config {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
         let Config {
             election_timeout_min,
             election_timeout_range,
@@ -230,21 +223,21 @@ impl WriteBytes for Config {
             id,
             nodes
         } = self;
-        let mut amt = writer.write(&election_timeout_min.to_be_bytes())?;
-        amt += writer.write(&election_timeout_range.to_be_bytes())?;
-        amt += writer.write(&heartbeat_timeout.to_be_bytes())?;
-        amt += writer.write(&rpc_response_timeout.to_be_bytes())?;
-        amt += writer.write(&max_entries_in_append_entries.to_be_bytes())?;
-        amt += writer.write(&max_bytes_in_install_snapshot.to_be_bytes())?;
-        amt += writer.write(&next_index_decrease_rate.to_be_bytes())?;
-        amt += writer.write(&snapshot_min_log_size.to_be_bytes())?;
-        amt += writer.write(&id.to_be_bytes())?;
-        amt += writer.write(&(nodes.len() as u32).to_be_bytes())?;
+        writer.write_u64(*election_timeout_min)?;
+        writer.write_u64(*election_timeout_range)?;
+        writer.write_u64(*heartbeat_timeout)?;
+        writer.write_u64(*rpc_response_timeout)?;
+        writer.write_u32(*max_entries_in_append_entries)?;
+        writer.write_u32(*max_bytes_in_install_snapshot)?;
+        writer.write_u32(*next_index_decrease_rate)?;
+        writer.write_u32(*snapshot_min_log_size)?;
+        writer.write_u32(*id)?;
+        writer.write_u32(nodes.len() as u32)?;
         for (id, addr) in nodes {
-            amt += writer.write(&id.to_be_bytes())?;
-            amt += addr.write_bytes(&mut writer)?;
+            writer.write_u32(*id)?;
+            addr.write_bytes(writer)?;
         }
-        Ok(amt)
+        Ok(())
     }
 }
 
@@ -313,51 +306,49 @@ impl TryFromBytes for NodeAddress {
 }
 
 impl WriteBytes for NodeAddress {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-        let mut amt = 0;
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
         match self {
             NodeAddress::SocketAddress(addr) => {
-                amt += writer.write(&[NODE_ADDRESS_SOCKET])?;
+                writer.write_u8(NODE_ADDRESS_SOCKET)?;
                 match addr {
                     SocketAddr::V4(addr) => {
                         let octets = addr.ip().octets();
-                        amt += writer.write(&(octets.len() as u8).to_be_bytes())?;
-                        amt += writer.write(&octets)?
+                        writer.write_u8(octets.len() as u8)?;
+                        writer.write(&octets)?;
                     }
                     SocketAddr::V6(addr) => {
                         let octets = addr.ip().octets();
-                        amt += writer.write(&(octets.len() as u8).to_be_bytes())?;
-                        amt += writer.write(&octets)?
+                        writer.write_u8(octets.len() as u8)?;
+                        writer.write(&octets)?;
                     }
                 };
-                amt += writer.write(&addr.port().to_be_bytes())?;
+                writer.write_u16(addr.port())
             }
             NodeAddress::String(str) => {
-                amt += writer.write(&[NODE_ADDRESS_STRING])?;
-                amt += writer.write(&(str.len() as u32).to_be_bytes())?;
-                amt += writer.write(str.as_bytes())?;
+                writer.write_u8(NODE_ADDRESS_STRING)?;
+                writer.write_u32(str.len() as u32)?;
+                writer.write(str.as_bytes())
             }
             NodeAddress::Custom(bytes) => {
-                amt += writer.write(&[NODE_ADDRESS_CUSTOM])?;
-                amt += writer.write(&(bytes.len() as u32).to_be_bytes())?;
-                amt += writer.write(bytes)?;
+                writer.write_u8(NODE_ADDRESS_CUSTOM)?;
+                writer.write_u32(bytes.len() as u32)?;
+                writer.write(bytes)
             }
         }
-        Ok(amt)
     }
 }
 
 impl<'a, C: WriteBytes> WriteBytes for OutgoingAppendEntries<'a, C> {
-    fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-        let mut amt = writer.write(&[MESSAGE_APPEND_ENTRIES_ID])?;
-        amt += writer.write(&self.term.to_be_bytes())?;
-        amt += writer.write(&self.prev_log_index.to_be_bytes())?;
-        amt += writer.write(&self.prev_log_term.to_be_bytes())?;
-        amt += writer.write(&self.leader_commit.to_be_bytes())?;
+    fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
+        writer.write_u8(MESSAGE_APPEND_ENTRIES_ID)?;
+        writer.write_u32(self.term)?;
+        writer.write_u32(self.prev_log_index)?;
+        writer.write_u32(self.prev_log_term)?;
+        writer.write_u32(self.leader_commit)?;
         for entry in self.entries {
-            amt += entry.write_bytes(&mut writer)?;
+            entry.write_bytes(writer)?;
         }
-        Ok(amt)
+        Ok(())
     }
 }
 
@@ -367,20 +358,19 @@ mod tests {
     use std::io;
     use std::io::Write;
 
-    use crate::bytes::{BytesIterator, BytesRef, ReadBytes, TryFromBytes, WriteBytes};
+    use crate::bytes::{BytesIterator, BytesRef, BytesWriter, ReadBytes, TryFromBytes, WriteBytes};
     use crate::config::{Config, NodeAddress};
     use crate::message::{Message, OutgoingAppendEntries};
     use crate::state_machine::{RaftStateMachine, StateMachine};
-    use crate::storage::log::{LogEntryType, LogEntry};
+    use crate::storage::log::{LogEntry, LogEntryType};
 
     #[derive(Eq, PartialEq, Debug)]
     struct DummyData(Vec<u8>);
 
     impl WriteBytes for DummyData {
-        fn write_bytes(&self, mut writer: impl Write) -> io::Result<usize> {
-            let mut amt = writer.write(&(self.0.len() as u32).to_be_bytes())?;
-            amt += writer.write(&self.0)?;
-            Ok(amt)
+        fn write_bytes<W: Write>(&self, writer: &mut BytesWriter<W>) -> io::Result<()> {
+            writer.write_u32(self.0.len() as u32)?;
+            writer.write(&self.0)
         }
     }
 
@@ -474,7 +464,7 @@ mod tests {
     fn log_entry_command() {
         let expected = LogEntry { term: 452, entry_type: LogEntryType::Command { command: DummyData("hello".as_bytes().to_vec()), client_id: 42, command_id: 0 } };
         let mut buf = vec![];
-        expected.write_bytes(&mut buf).unwrap();
+        expected.write_bytes_with_writer(&mut buf).unwrap();
         let actual = LogEntry::try_from_slice(&buf).unwrap();
         assert_entries_equal(&actual, &expected);
     }
@@ -484,7 +474,7 @@ mod tests {
         let expected = LogEntry { term: 452, entry_type: LogEntryType::Command { command: DummyData("hello".as_bytes().to_vec()), client_id: 42, command_id: 0 } };
         let mut buf = vec![];
 
-        let write_amt = expected.write_bytes(&mut buf).unwrap();
+        let write_amt = expected.write_bytes_with_writer(&mut buf).unwrap();
         buf.write(&[32, 0, 5, 43, 1, 34, 4, 3, 53, 13, 4]).unwrap();
 
         let mut bytes = BytesRef::new(&buf);
@@ -513,7 +503,7 @@ mod tests {
         let mut buf = vec![];
 
         for entry in &entries {
-            entry.write_bytes(&mut buf).unwrap();
+            entry.write_bytes_with_writer(&mut buf).unwrap();
         }
 
         let mut bytes = BytesRef::new(&buf);
@@ -600,7 +590,7 @@ mod tests {
         let mut buf = vec![];
         for expected in messages {
             buf.clear();
-            let amt = expected.write_bytes(&mut buf).unwrap();
+            let amt = expected.write_bytes_with_writer(&mut buf).unwrap();
             let actual = Message::try_from_bytes(&buf[..amt]).unwrap();
             assert_eq!(actual, expected)
         }
@@ -634,7 +624,7 @@ mod tests {
         };
 
         let mut buf = vec![];
-        let amt = append_entries.write_bytes(&mut buf).unwrap();
+        let amt = append_entries.write_bytes_with_writer(&mut buf).unwrap();
 
         let message = Message::try_from_bytes(&buf[..amt]).unwrap();
 
@@ -672,7 +662,7 @@ mod tests {
 
         let mut buf = vec![];
 
-        let write_amt = expected.write_bytes(&mut buf).unwrap();
+        let write_amt = expected.write_bytes_with_writer(&mut buf).unwrap();
 
         let mut bytes = BytesRef::new(&buf[..write_amt]);
         let actual = RaftStateMachine::<DummyData>::try_from_bytes(&mut bytes).unwrap();
@@ -693,7 +683,7 @@ mod tests {
 
         let mut buf = vec![];
 
-        let write_amt = expected.write_bytes(&mut buf).unwrap();
+        let write_amt = expected.write_bytes_with_writer(&mut buf).unwrap();
 
         let mut bytes = BytesRef::new(&buf[..write_amt]);
         let actual = RaftStateMachine::<DummyData>::try_from_bytes(&mut bytes).unwrap();
